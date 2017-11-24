@@ -1,16 +1,17 @@
-﻿using System;
-using System.Linq;
-using System.Web.OData.Query;
-
-using Microsoft.OData.Core.UriParser;
-using Microsoft.OData.Core.UriParser.Semantic;
-using Microsoft.Azure.Documents.OData.Sql;
-
-namespace Microsoft.Azure.Documents.OData.Sql
+﻿namespace Microsoft.Azure.Documents.OData.Sql
 {
+    using System;
+    using System.Linq;
+    using System.Text;
+    using System.Web.OData.Query;
+
+    using Microsoft.OData.Core.UriParser;
+    using Microsoft.OData.Core.UriParser.Semantic;
+
     /// <summary>
     /// TranslateOptions
     /// </summary>
+    [Flags]
     public enum TranslateOptions
     {
         /// <summary>
@@ -45,16 +46,65 @@ namespace Microsoft.Azure.Documents.OData.Sql
     public class ODataToSqlTranslator
     {
         /// <summary>
-        /// function that takes in an <see cref="ODataQueryOptions"/>, a string representing the type to filter, and a <see cref="FeedOptions"/>
+        /// The visitor patterned ODataNodeToStringBuilder
         /// </summary>
-        /// <param name="odataQueryOptions"></param>
-        /// <param name="translateOptions"></param>
-        /// <param name="additionalWhereClause"></param>
+        private readonly ODataNodeToStringBuilder oDataNodeToStringBuilder;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ODataToSqlTranslator"/> class.
+        /// </summary>
+        /// <param name="queryFormatter">Optional QueryFormatter, if no formatter provided, a SQLQueryFormatter is used by default</param>
+        public ODataToSqlTranslator(IQueryFormatter queryFormatter = null)
+        {
+            queryFormatter = queryFormatter ?? new SQLQueryFormatter();
+            this.oDataNodeToStringBuilder = new ODataNodeToStringBuilder(queryFormatter);
+        }
+
+        /// <summary>
+        /// Function that takes in an <see cref="ODataQueryOptions"/>, a string representing the type to filter
+        /// </summary>
+        /// <param name="odataQueryOptions">The query.</param>
+        /// <param name="translateOptions">Translation options.</param>
+        /// <param name="additionalWhereClause">Additional clause to apply.</param>
         /// <returns>returns an SQL expression if successfully translated, otherwise a null string</returns>
         public string Translate(ODataQueryOptions odataQueryOptions, TranslateOptions translateOptions, string additionalWhereClause = null)
         {
+            // TODO: refactor to use a StringBuilder
             string selectClause, whereClause, orderbyClause, topClause;
             selectClause = whereClause = orderbyClause = topClause = string.Empty;
+            bool hasJoinClause = false;
+
+            // WHERE CLAUSE
+            if ((translateOptions & TranslateOptions.WHERE_CLAUSE) == TranslateOptions.WHERE_CLAUSE)
+            {
+                var customWhereClause = additionalWhereClause == null
+                    ? string.Empty
+                    : $"{additionalWhereClause}";
+                var hasFilterClause = odataQueryOptions?.Filter?.FilterClause;
+                Tuple<string, string> retVal = null;
+                if (hasFilterClause != null)
+                {
+                    retVal = this.TranslateFilterClause(hasFilterClause);
+                }
+
+                whereClause = hasFilterClause == null
+                    ? string.Empty
+                    : retVal.Item2;
+
+                whereClause = (!string.IsNullOrEmpty(customWhereClause) && !string.IsNullOrEmpty(whereClause))
+                    ? $"{customWhereClause} AND {whereClause}"
+                    : $"{customWhereClause}{whereClause}";
+
+                whereClause = string.IsNullOrEmpty(whereClause)
+                    ? string.Empty
+                    : $"{Constants.SQLWhereSymbol} {whereClause}";
+
+                if (!string.IsNullOrEmpty(retVal?.Item1))
+                {
+                    hasJoinClause = true;
+                    whereClause = string.Concat(retVal.Item1, " ", whereClause);
+                }
+            }
 
             // SELECT CLAUSE
             if ((translateOptions & TranslateOptions.SELECT_CLAUSE) == TranslateOptions.SELECT_CLAUSE)
@@ -68,26 +118,10 @@ namespace Microsoft.Azure.Documents.OData.Sql
                 }
 
                 selectClause = odataQueryOptions?.SelectExpand?.RawSelect == null
-                    ? "*"
-                    : string.Join(", ", odataQueryOptions.SelectExpand.RawSelect.Split(',').Select(c => string.Concat("c.", c.Trim())));
-                selectClause = $"{Constants.SQLSelectSymbol} {topClause}{selectClause} {Constants.SQLFromSymbol} {Constants.SQLFieldNameSymbol} ";
-            }
+                    ? hasJoinClause ? string.Concat(Constants.SqlValueSymbol, Constants.SymbolSpace, Constants.SQLFieldNameSymbol) : Constants.SQLAsteriskSymbol
+                    : string.Join(", ", odataQueryOptions.SelectExpand.RawSelect.Split(',').Select(c => string.Concat(Constants.SQLFieldNameSymbol, Constants.SymbolDot, c.Trim())));
 
-            // WHERE CLAUSE
-            if ((translateOptions & TranslateOptions.WHERE_CLAUSE) == TranslateOptions.WHERE_CLAUSE)
-            {
-                var customWhereClause = additionalWhereClause == null
-                    ? string.Empty
-                    : $"{additionalWhereClause}";
-                whereClause = odataQueryOptions?.Filter?.FilterClause == null
-                    ? string.Empty
-                    : $"{this.TranslateFilterClause(odataQueryOptions.Filter.FilterClause)}";
-                whereClause = (!string.IsNullOrEmpty(customWhereClause) && !string.IsNullOrEmpty(whereClause))
-                    ? $"{customWhereClause} AND {whereClause}"
-                    : $"{customWhereClause}{whereClause}";
-                whereClause = string.IsNullOrEmpty(whereClause)
-                    ? string.Empty
-                    : $"{Constants.SQLWhereSymbol} {whereClause} ";
+                selectClause = $"{Constants.SQLSelectSymbol} {topClause}{selectClause} {Constants.SQLFromSymbol} {Constants.SQLFieldNameSymbol} ";
             }
 
             // ORDER BY CLAUSE
@@ -98,30 +132,58 @@ namespace Microsoft.Azure.Documents.OData.Sql
                     : $"{Constants.SQLOrderBySymbol} {this.TranslateOrderByClause(odataQueryOptions.OrderBy.OrderByClause)} ";
             }
 
-            return string.Concat(selectClause, whereClause, orderbyClause);
-        }
+            var sb = new StringBuilder();
+            sb.Append(selectClause);
+            sb.Append(whereClause);
+            var sp = default(string);
+            if (!string.IsNullOrEmpty(whereClause))
+            {
+                sp = " ";
+            }
 
-        /// <summary>
-        /// Constructor for ODataSqlTranslator
-        /// </summary>
-        /// <param name="queryFormatter">Optional QueryFormatter, if no formatter provided, a SQLQueryFormatter is used by default</param>
-        public ODataToSqlTranslator(QueryFormatterBase queryFormatter = null)
-        {
-            queryFormatter = queryFormatter ?? new SQLQueryFormatter();
-            oDataNodeToStringBuilder = new ODataNodeToStringBuilder(queryFormatter);
-        }
+            if (!string.IsNullOrEmpty(orderbyClause))
+            {
+                sb.Append(sp);
+                sb.Append(orderbyClause);
+            }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        private ODataToSqlTranslator() { }
+            return sb.ToString();
+        }
 
         /// <summary>Translates a <see cref="FilterClause"/> into a <see cref="FilterClause"/>.</summary>
         /// <param name="filterClause">The filter clause to translate.</param>
         /// <returns>The translated string.</returns>
-        private string TranslateFilterClause(FilterClause filterClause)
+        private Tuple<string, string> TranslateFilterClause(FilterClause filterClause)
         {
-            return oDataNodeToStringBuilder.TranslateNode(filterClause.Expression);
+            var tmp = this.oDataNodeToStringBuilder.TranslateNode(filterClause.Expression);
+            if (string.IsNullOrEmpty(tmp) || tmp.IndexOf(Constants.Delimiter, StringComparison.Ordinal) < 0)
+            {
+                return new Tuple<string, string>(null, tmp);
+            }
+
+            var splited = tmp.Split(new[] { Constants.Delimiter[0] }, options: StringSplitOptions.RemoveEmptyEntries);
+            var sbJoin = new StringBuilder();
+            var sbWhere = new StringBuilder();
+            var sp = string.Empty;
+
+            foreach (var a in splited)
+            {
+                if (a.StartsWith(Constants.SQLJoinSymbol))
+                {
+                    sbJoin.Append(sp);
+                    sbJoin.Append(a);
+                    if (sp.Length == 0)
+                    {
+                        sp = " ";
+                    }
+                }
+                else
+                {
+                    sbWhere.Append(a);
+                }
+            }
+
+            return new Tuple<string, string>(sbJoin.ToString(), sbWhere.ToString());
         }
 
         /// <summary>Translates a <see cref="OrderByClause"/> into a <see cref="OrderByClause"/>.</summary>
@@ -130,7 +192,7 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// <returns>The translated string.</returns>
         private string TranslateOrderByClause(OrderByClause orderByClause, string preExpr = null)
         {
-            string expr = string.Concat(oDataNodeToStringBuilder.TranslateNode(orderByClause.Expression), Constants.SymbolSpace, orderByClause.Direction == OrderByDirection.Ascending ? Constants.KeywordAscending.ToUpper() : Constants.KeywordDescending.ToUpper());
+            string expr = string.Concat(this.oDataNodeToStringBuilder.TranslateNode(orderByClause.Expression), Constants.SymbolSpace, orderByClause.Direction == OrderByDirection.Ascending ? Constants.KeywordAscending.ToUpper() : Constants.KeywordDescending.ToUpper());
 
             expr = string.IsNullOrWhiteSpace(preExpr) ? expr : string.Concat(preExpr, Constants.SymbolComma, Constants.SymbolSpace, expr);
 
@@ -141,10 +203,5 @@ namespace Microsoft.Azure.Documents.OData.Sql
 
             return expr;
         }
-
-        /// <summary>
-        /// Visitor patterned ODataNodeToStringBuilder
-        /// </summary>
-        private ODataNodeToStringBuilder oDataNodeToStringBuilder { get; set; }
     }
 }

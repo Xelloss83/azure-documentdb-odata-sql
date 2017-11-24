@@ -5,7 +5,10 @@
     /// </summary>
     public static class Constants
     {
-        #region SQL Clauses
+        /// <summary>
+        /// used e.g. to parse and recompose a SQL string containing a JOIN clause
+        /// </summary>
+        public const string Delimiter = "|";
 
         /// <summary>
         /// Sql "SELECT" clause
@@ -26,6 +29,21 @@
         /// Sql "FROM" clause
         /// </summary>
         public const string SQLFromSymbol = "FROM";
+
+        /// <summary>
+        /// Sql JOIN clause
+        /// </summary>
+        public const string SQLJoinSymbol = "JOIN";
+
+        /// <summary>
+        /// SQL IN keyword
+        /// </summary>
+        public const string SQLInSymbol = "IN";
+
+        /// <summary>
+        /// Slq VALUE
+        /// </summary>
+        public const string SqlValueSymbol = "VALUE";
 
         /// <summary>
         /// Sql "ORDER BY" clause
@@ -106,9 +124,7 @@
         /// Sql "OR" operator
         /// </summary>
         public const string SQLOrSymbol = "OR";
-        #endregion
 
-        #region Symbols
         /// <summary>
         /// '?' Aggregator to merge request parameters
         /// </summary>
@@ -198,9 +214,7 @@
         /// End a JSON Array of string
         /// </summary>
         public const string SymbolEngJsonStringArray = "\"]";
-        #endregion
 
-        #region Keywords
         /// <summary>
         /// <c>"asc"</c> keyword for expressions.
         /// </summary>
@@ -350,6 +364,5 @@
         /// "OR" keyword for search option.
         /// </summary>
         public const string SearchKeywordOr = "OR";
-        #endregion
     }
 }

@@ -1,19 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Web.OData.Query;
-
-using Microsoft.OData.Core;
-using Microsoft.OData.Core.UriParser;
-using Microsoft.OData.Core.UriParser.Semantic;
-using Microsoft.OData.Core.UriParser.TreeNodeKinds;
-using Microsoft.OData.Core.UriParser.Visitors;
-using Microsoft.OData.Edm;
-
-namespace Microsoft.Azure.Documents.OData.Sql
+﻿namespace Microsoft.Azure.Documents.OData.Sql
 {
-     /// <summary>
+    using System.Collections.Generic;
+    using System.Globalization;
+
+    using Microsoft.OData.Core;
+    using Microsoft.OData.Core.UriParser.Semantic;
+    using Microsoft.OData.Core.UriParser.TreeNodeKinds;
+    using Microsoft.OData.Core.UriParser.Visitors;
+    using Microsoft.OData.Edm;
+
+    /// <summary>
     /// Build QueryNode to string Representation 
     /// </summary>
     internal class ODataNodeToStringBuilder : QueryNodeVisitor<string>
@@ -23,26 +19,24 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// </summary>
         private bool searchFlag;
 
-        /// <summary>s
-        /// Gets the formatter to format the query
+        /// <summary>
+        /// whether translating an AnyClause or not
         /// </summary>
-        private QueryFormatterBase QueryFormatter { get; set; }
+        private bool joinClause;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ODataNodeToStringBuilder"/> class
         /// </summary>
         /// <param name="queryFormatter">the query format class</param>
-        public ODataNodeToStringBuilder(QueryFormatterBase queryFormatter)
+        public ODataNodeToStringBuilder(IQueryFormatter queryFormatter)
         {
             this.QueryFormatter = queryFormatter;
         }
 
         /// <summary>
-        /// Prevents a default instance of the <see cref="ODataNodeToStringBuilder"/> class from being created
+        /// Gets the formatter to format the query
         /// </summary>
-        private ODataNodeToStringBuilder()
-        {
-        }
+        private IQueryFormatter QueryFormatter { get; }
 
         /// <summary>
         /// Translates a <see cref="AllNode"/> into a corresponding <see cref="string"/>.
@@ -51,8 +45,7 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// <returns>The translated string.</returns>
         public override string Visit(AllNode node)
         {
-            string result = string.Concat(this.TranslateNode(node.Source), Constants.SymbolForwardSlash, Constants.KeywordAll, Constants.SymbolOpenParen, node.CurrentRangeVariable.Name, Constants.SymbolColon, this.TranslateNode(node.Body), Constants.SymbolClosedParen);
-            return result;
+            return string.Concat(Constants.Delimiter, this.TranslateNode(node.Source, true), Constants.Delimiter, this.TranslateNode(node.Body));
         }
 
         /// <summary>
@@ -62,14 +55,7 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// <returns>The translated string.</returns>
         public override string Visit(AnyNode node)
         {
-            if (node.CurrentRangeVariable == null && node.Body.Kind == QueryNodeKind.Constant)
-            {
-                return string.Concat(this.TranslateNode(node.Source), Constants.SymbolForwardSlash, Constants.KeywordAny, Constants.SymbolOpenParen, Constants.SymbolClosedParen);
-            }
-            else
-            {
-                return string.Concat(this.TranslateNode(node.Source), Constants.SymbolForwardSlash, Constants.KeywordAny, Constants.SymbolOpenParen, node.CurrentRangeVariable.Name, ":", this.TranslateNode(node.Body), Constants.SymbolClosedParen);
-            }
+            return string.Concat(Constants.Delimiter, this.TranslateNode(node.Source, true), Constants.Delimiter, this.TranslateNode(node.Body));
         }
 
         /// <summary>
@@ -82,28 +68,28 @@ namespace Microsoft.Azure.Documents.OData.Sql
             var leftNode = node.Left;
             while (leftNode != null && leftNode.Kind == QueryNodeKind.Convert)
             {
-                leftNode = (leftNode as ConvertNode).Source;
+                leftNode = ((ConvertNode)leftNode).Source;
             }
 
             var rightNode = node.Right;
             while (rightNode != null && rightNode.Kind == QueryNodeKind.Convert)
             {
-                rightNode = (rightNode as ConvertNode).Source;
+                rightNode = ((ConvertNode)rightNode).Source;
             }
 
             var left = this.TranslateNode(node.Left);
-            if (leftNode.Kind == QueryNodeKind.BinaryOperator && this.TranslateBinaryOperatorPriority(((BinaryOperatorNode)leftNode).OperatorKind) < this.TranslateBinaryOperatorPriority(node.OperatorKind))
+            if (leftNode.Kind == QueryNodeKind.BinaryOperator && TranslateBinaryOperatorPriority(((BinaryOperatorNode)leftNode).OperatorKind) < TranslateBinaryOperatorPriority(node.OperatorKind))
             {
                 left = string.Concat(Constants.SymbolOpenParen, left, Constants.SymbolClosedParen);
             }
 
             var right = this.TranslateNode(node.Right);
-            if (rightNode.Kind == QueryNodeKind.BinaryOperator && this.TranslateBinaryOperatorPriority(((BinaryOperatorNode)rightNode).OperatorKind) < this.TranslateBinaryOperatorPriority(node.OperatorKind))
+            if (rightNode.Kind == QueryNodeKind.BinaryOperator && TranslateBinaryOperatorPriority(((BinaryOperatorNode)rightNode).OperatorKind) < TranslateBinaryOperatorPriority(node.OperatorKind))
             {
                 right = string.Concat(Constants.SymbolOpenParen, right, Constants.SymbolClosedParen);
             }
 
-            return string.Concat(left, Constants.SymbolSpace, this.BinaryOperatorNodeToString(node.OperatorKind), Constants.SymbolSpace, right);
+            return string.Concat(left, Constants.SymbolSpace, BinaryOperatorNodeToString(node.OperatorKind), Constants.SymbolSpace, right);
         }
 
         /// <summary>
@@ -138,9 +124,20 @@ namespace Microsoft.Azure.Documents.OData.Sql
                 return Constants.KeywordNull;
             }
 
-            if (node.TypeReference.Definition.TypeKind == EdmTypeKind.Enum)
+            if (node.TypeReference.IsEnum())
             {
-                return this.QueryFormatter.TranslateEnumValue(node.LiteralText, (node.Value as ODataEnumValue).TypeName);
+                var specificNode = (ODataEnumValue)node.Value;
+                return this.QueryFormatter.TranslateEnumValue(node.TypeReference, specificNode.Value);
+            }
+
+            if (node.TypeReference.IsGuid())
+            {
+                return $"'{node.Value}'";
+            }
+
+            if (node.TypeReference.IsDate() || node.TypeReference.IsDateTimeOffset())
+            {
+                return $"'{node.LiteralText}'";
             }
 
             return node.LiteralText;
@@ -373,24 +370,15 @@ namespace Microsoft.Azure.Documents.OData.Sql
             // if current translated node is SearchNode, the UnaryOperator should return NOT, or return not
             if (node.OperatorKind == UnaryOperatorKind.Not)
             {
-                if (this.searchFlag)
-                {
-                    result = Constants.SearchKeywordNot;
-                }
-                else
-                {
-                    result = Constants.KeywordNot;
-                }
+                result = this.searchFlag ? Constants.SearchKeywordNot : Constants.KeywordNot;
             }
 
             if (node.Operand.Kind == QueryNodeKind.Constant || node.Operand.Kind == QueryNodeKind.SearchTerm)
             {
                 return string.Concat(result, ' ', this.TranslateNode(node.Operand));
             }
-            else
-            {
-                return string.Concat(result, Constants.SymbolOpenParen, this.TranslateNode(node.Operand), Constants.SymbolClosedParen);
-            }
+
+            return string.Concat(result, Constants.SymbolOpenParen, this.TranslateNode(node.Operand), Constants.SymbolClosedParen);
         }
 
         /// <summary>Translates a <see cref="LevelsClause"/> into a string.</summary>
@@ -408,9 +396,11 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// Main dispatching visit method for translating query-nodes into expressions.
         /// </summary>
         /// <param name="node">The node to visit/translate.</param>
+        /// <param name="joinClause">true if join must be extracted</param>
         /// <returns>The LINQ string resulting from visiting the node.</returns>
-        internal string TranslateNode(QueryNode node)
+        internal string TranslateNode(QueryNode node, bool joinClause = false)
         {
+            this.joinClause |= joinClause;
             return node.Accept(this);
         }
 
@@ -426,29 +416,6 @@ namespace Microsoft.Azure.Documents.OData.Sql
         }
 
         /// <summary>
-        /// Add dictionary to url and each alias value will be URL encoded.
-        /// </summary>
-        /// <param name="dictionary">key value pair dictionary</param>
-        /// <returns>The url query string of dictionary's key value pairs (URL encoded)</returns>
-        internal string TranslateParameterAliasNodes(IDictionary<string, SingleValueNode> dictionary)
-        {
-            string result = null;
-            if (dictionary != null)
-            {
-                foreach (KeyValuePair<string, SingleValueNode> keyValuePair in dictionary)
-                {
-                    if (keyValuePair.Value != null)
-                    {
-                        string tmp = this.TranslateNode(keyValuePair.Value);
-                        result = string.IsNullOrEmpty(tmp) ? result : string.Concat(result, string.IsNullOrEmpty(result) ? null : Constants.RequestParamsAggregator.ToString(), keyValuePair.Key, Constants.SymbolEqual, Uri.EscapeDataString(tmp));
-                    }
-                }
-            }
-
-            return result;
-        }
-
-        /// <summary>
         /// Helper for translating an access to a metadata-defined property or navigation.
         /// </summary>
         /// <param name="sourceNode">The source of the property access.</param>
@@ -461,12 +428,14 @@ namespace Microsoft.Azure.Documents.OData.Sql
 
             if (string.IsNullOrEmpty(source))
             {
-                return this.QueryFormatter.TranslateFieldName(edmPropertyName);
+                return this.joinClause
+                    ? this.QueryFormatter.TranslateJoinClause(edmPropertyName)
+                    : this.QueryFormatter.TranslateFieldName(edmPropertyName);
             }
-            else
-            {
-                return this.QueryFormatter.TranslateSource(source, edmPropertyName);
-            }
+
+            return this.joinClause
+                ? this.QueryFormatter.TranslateJoinClause(source, edmPropertyName)
+                : this.QueryFormatter.TranslateSource(source, edmPropertyName);
         }
 
         /// <summary>
@@ -485,7 +454,7 @@ namespace Microsoft.Azure.Documents.OData.Sql
                 result = string.Concat(result, string.IsNullOrEmpty(result) ? null : Constants.SymbolComma.ToString(), this.TranslateNode(queryNode));
             }
 
-            var translatedFunctionCall = string.Concat(QueryFormatter.TranslateFunctionName(functionName), Constants.SymbolOpenParen, result, Constants.SymbolClosedParen);
+            var translatedFunctionCall = string.Concat(this.QueryFormatter.TranslateFunctionName(functionName), Constants.SymbolOpenParen, result, Constants.SymbolClosedParen);
             return functionName == Constants.KeywordTrim ? $"{translatedFunctionCall}{Constants.SymbolClosedParen}" : translatedFunctionCall;
         }
 
@@ -494,7 +463,7 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// </summary>
         /// <param name="operatorKind">the kind of the BinaryOperatorNode</param>
         /// <returns>string format of the operator</returns>
-        private string BinaryOperatorNodeToString(BinaryOperatorKind operatorKind)
+        private static string BinaryOperatorNodeToString(BinaryOperatorKind operatorKind)
         {
             switch (operatorKind)
             {
@@ -525,7 +494,7 @@ namespace Microsoft.Azure.Documents.OData.Sql
         /// </summary>
         /// <param name="operatorKind">binary operator </param>
         /// <returns>the priority value of the binary operator</returns>
-        private int TranslateBinaryOperatorPriority(BinaryOperatorKind operatorKind)
+        private static int TranslateBinaryOperatorPriority(BinaryOperatorKind operatorKind)
         {
             switch (operatorKind)
             {
