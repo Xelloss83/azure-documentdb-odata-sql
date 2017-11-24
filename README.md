@@ -32,6 +32,13 @@ SELECT TOP 5 c.revenue FROM c WHERE CONTAINS(c.englishName,'Limited') ORDER BY c
 
 [$orderby](http://docs.oasis-open.org/odata/odata/v4.0/errata03/os/complete/part1-protocol/odata-v4.0-errata03-os-part1-protocol-complete.html#_The_$select_System_1) => ORDER BY
 
+#### Built-in Operators
+Items/any(d:d/Quantity gt 100)  => JOIN a in c.Items WHERE a.Quantity > 100
+Note: If more objects in 'Items' qualify for the expression, duplicate results may result. e.g.
+SELECT  value c FROM c
+JOIN a IN c.sub
+WHERE a.v=false  might return c twice, while c exists once, because the join in 'sub' has two hits
+
 #### Built-in Query Functions
 contains()(field, 'value')	 => CONTAINS(c.field, 'value')
 
@@ -93,3 +100,5 @@ The options can be combined with bit operators such as ```(TranslateOptions.SELE
 ## Authors
 
 * **Ziyou Zheng** - Microsoft Universal Store Team -
+* **Egbert Nierop** - Free Lance developer - Added any functionality 2017 oct 13. note: all-functionality not supported.
+* **Alexander Sonin** - Microsoft -
